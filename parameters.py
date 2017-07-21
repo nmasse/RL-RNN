@@ -31,7 +31,9 @@ par = {
     'df_num'            : '0008',    # Designates which dendrite function to use
 
     # hidden layer shape
-    'n_hidden'          : 50,
+    'n_input'           : 50,
+    'n_decision'        : 50,
+    'n_value'           : 50,
     'den_per_unit'      : 8,
 
     # Timings and rates
@@ -150,29 +152,39 @@ def generate_masks():
     par['w_rnn_dend_mask'] = np.zeros((par['hidden_to_hidden_dend_dims']), dtype=np.float32)
     par['w_rnn_soma_mask'] = np.zeros((par['hidden_to_hidden_soma_dims']), dtype=np.float32)
 
-    par['w_stim_dend_mask'] = np.zeros((par['input_to_hidden_dend_dims']), dtype=np.float32)
-    par['w_stim_soma_mask'] = np.zeros((par['input_to_hidden_soma_dims']), dtype=np.float32)
+    par['w_env_dend_mask'] = np.zeros((par['input_to_decision_dend_dims']), dtype=np.float32)
+    par['w_env_soma_mask'] = np.zeros((par['input_to_decision_soma_dims']), dtype=np.float32)
 
-    par['w_td_dend_mask'] = np.zeros((par['td_to_hidden_dend_dims']), dtype=np.float32)
-    par['w_td_soma_mask'] = np.zeros((par['td_to_hidden_soma_dims']), dtype=np.float32)
+    par['w_act_to_val_dend_mask'] = np.zeros((par['act_to_val_dend_dims']), dtype=np.float32)
+    par['w_act_to_val_soma_mask'] = np.zeros((par['act_to_val_soma_dims']), dtype=np.float32)
 
-    # input to hidden
-    for source in range(par['num_stim_tuned']):
-        for target in range(par['n_hidden']):
-            par['w_stim_dend_mask'][target,:,source] = connectivity[1,input_type[source],hidden_type[target]]
-            par['w_stim_soma_mask'][target,source] = connectivity[0,input_type[source],hidden_type[target]]
+    par['w_dec_to_val_dend_mask'] = np.zeros((par['decision_to_val_dend_dims']), dtype=np.float32)
+    par['w_dec_to_val_soma_mask'] = np.zeros((par['decision_to_val_soma_dims']), dtype=np.float32)
 
-    # td to hidden
-    for source in range(par['n_input'] - par['num_stim_tuned']):
-        for target in range(par['n_hidden']):
-            par['w_td_dend_mask'][target,:,source] = connectivity[1,input_type[par['num_stim_tuned'] + source],hidden_type[target]]
-            par['w_td_soma_mask'][target,source] = connectivity[0,input_type[par['num_stim_tuned'] + source],hidden_type[target]]
+    # input to decision
+    for source in range(par['n_input']):
+        for target in range(par['n_decision']):
+            par['w_env_dend_mask'][target,:,source] = connectivity[1,input_type[source],hidden_type[target]]
+            par['w_env_soma_mask'][target,source] = connectivity[0,input_type[source],hidden_type[target]]
 
+    # decision to value
+    for source in range(par['n_decision']):
+        for target in range(par['n_value']):
+            par['w_val_dend_mask'][target,:,source] = connectivity[1,input_type[source],hidden_type[target]]
+            par['w_val_soma_mask'][target,source] = connectivity[0,input_type[source],hidden_type[target]]
+
+    # action to decision
+    for source in range(par['n_output']):
+        for target in range(par['n_value']):
+            par['w_act_dend_mask'][target,:,source] = connectivity[1,input_type[source],hidden_type[target]]
+            par['w_act_soma_mask'][target,source] = connectivity[0,input_type[source],hidden_type[target]]            
+ 
     # hidden to hidden
-    for source in range(par['n_hidden']):
-        for target in range(par['n_hidden']):
+    for source in range(par['n_decision']+par['n_value']):
+        for target in range(par['n_decision']+par['n_value']):
             par['w_rnn_dend_mask'][target,:,source] = connectivity[1,hidden_type[source],hidden_type[target]]
             par['w_rnn_soma_mask'][target,source] = connectivity[0,hidden_type[source],hidden_type[target]]
+
 
 def reduce_connectivity():
     # Clamp masks randomly
@@ -183,9 +195,9 @@ def reduce_connectivity():
 
     for i, j, k in itertools.product(r_nh, r_dpu, r_nst):
         if np.random.rand() > par['mask_connectivity']:
-            par['w_stim_dend_mask'][i,j,k] = 0
+            par['w_env_dend_mask'][i,j,k] = 0
         if np.random.rand() > par['mask_connectivity'] and j == 0:
-            par['w_stim_soma_mask'][i,k] = 0
+            par['w_env_soma_mask'][i,k] = 0
 
     for i, j, k in itertools.product(r_nh, r_dpu, r_ninst):
         if np.random.rand() > par['mask_connectivity']:
@@ -215,6 +227,7 @@ def spectral_radius(A):
 
         return r / np.shape(A)[1]
 
+
 def update_dependencies():
     """
     Updates all parameter dependencies
@@ -223,11 +236,8 @@ def update_dependencies():
     # Projected number of trials to take place
     par['projected_num_trials'] = par['batch_train_size']*par['num_train_batches']*par['num_iterations']
 
-    # Number of input neurons
-    par['n_input'] = par['num_stim_tuned'] + par['num_fix_tuned'] + par['num_rule_tuned'] + par['num_spatial_cue_tuned']
-
     # General network shape
-    par['shape'] = (par['n_input'], par['n_hidden'], par['n_output'])
+    par['shape'] = (par['n_input'], par['n_decision'], par['n_output'])
 
     # Possible rules based on rule type values
     par['possible_rules'] = [par['num_RFs'], par['num_rules']]
@@ -253,16 +263,16 @@ def update_dependencies():
     else:
         par['EI']  = False
 
-    par['num_exc_units'] = int(np.round(par['n_hidden']*par['exc_inh_prop']))
-    par['num_inh_units'] = par['n_hidden'] - par['num_exc_units']
+    par['num_exc_units'] = int(np.round(par['n_decision']*par['exc_inh_prop']))
+    par['num_inh_units'] = par['n_decision'] - par['num_exc_units']
 
-    par['EI_list'] = np.ones(par['n_hidden'], dtype=np.float32)
+    par['EI_list'] = np.ones(par['n_decision'], dtype=np.float32)
     par['EI_list'][-par['num_inh_units']:] = -1.
 
     par['EI_matrix'] = np.diag(par['EI_list'])
 
-    par['EI_list_d_exc'] = np.ones(par['n_hidden'], dtype=np.float32)
-    par['EI_list_d_inh'] = np.ones(par['n_hidden'], dtype=np.float32)
+    par['EI_list_d_exc'] = np.ones(par['n_decision'], dtype=np.float32)
+    par['EI_list_d_inh'] = np.ones(par['n_decision'], dtype=np.float32)
 
     par['EI_list_d_exc'][-par['num_inh_units']:] = 0.
     par['EI_list_d_inh'][:par['num_exc_units']] = 0.
@@ -274,7 +284,7 @@ def update_dependencies():
     # EI matrix addresses soma-to-dendrite interactions.  It follows the same
     # setup process, however.
 
-    # [par['n_hidden'], par['den_per_unit'], par['n_hidden']]
+    # [par['n_decision'], par['den_per_unit'], par['n_decision']]
     par['num_exc_dends'] = int(np.round(par['den_per_unit']))
 
     # Membrane time constant of RNN neurons
@@ -286,28 +296,25 @@ def update_dependencies():
     # Dendrite time constant for dendritic branches
     par['alpha_dendrite'] = par['dt']/par['dendrite_time_constant']
 
-    # Get information about the task
-    # par['events']
-    # par['dt_sec']
-    # par['trial_length']
-    # par['num_time_steps']
-
 
     ####################################################################
     ### Setting up assorted intial weights, biases, and other values ###
     ####################################################################
 
-    par['h_init'] = 0.1*np.ones((par['n_hidden'], par['batch_train_size']), dtype=np.float32)
-    par['d_init'] = 0.1*np.ones((par['n_hidden'], par['den_per_unit'], par['batch_train_size']), dtype=np.float32)
+    par['h_init'] = 0.1*np.ones((par['n_decision']+par['n_value'], par['batch_train_size']), dtype=np.float32)
+    par['d_init'] = 0.1*np.ones((par['n_decision']+par['n_value'], par['den_per_unit'], par['batch_train_size']), dtype=np.float32)
 
-    par['input_to_hidden_dend_dims'] = [par['n_hidden'], par['den_per_unit'], par['num_stim_tuned']]
-    par['input_to_hidden_soma_dims'] = [par['n_hidden'], par['num_stim_tuned']]
+    par['input_to_decision_dend_dims'] = [par['n_decision'], par['den_per_unit'], par['n_input']]
+    par['input_to_decision_soma_dims'] = [par['n_decision'], par['n_input']]
 
-    par['td_to_hidden_dend_dims']     = [par['n_hidden'], par['den_per_unit'], par['n_input'] - par['num_stim_tuned']]
-    par['td_to_hidden_soma_dims']     = [par['n_hidden'], par['n_input'] - par['num_stim_tuned']]
+    par['decision_to_val_dend_dims'] = [par['n_value'], par['den_per_unit'], par['n_decision']]
+    par['decision_to_val_soma_dims'] = [par['n_value'], par['n_decision']]
 
-    par['hidden_to_hidden_dend_dims'] = [par['n_hidden'], par['den_per_unit'], par['n_hidden']]
-    par['hidden_to_hidden_soma_dims'] = [par['n_hidden'], par['n_hidden']]
+    par['act_to_val_dend_dims'] = [par['n_value'], par['den_per_unit'], par['n_output']]
+    par['act_to_val_soma_dims'] = [par['n_value'], par['n_output']]
+
+    par['hidden_to_hidden_dend_dims'] = [par['n_decision']+par['n_value'], par['den_per_unit'], par['n_decision']+par['n_value']]
+    par['hidden_to_hidden_soma_dims'] = [par['n_decision']+par['n_value'], par['n_decision']+par['n_value']]
 
     # Generate random masks
     generate_masks()
@@ -316,17 +323,24 @@ def update_dependencies():
         reduce_connectivity()
 
     # Initialize input weights
-    par['w_stim_dend0'] = initialize(par['input_to_hidden_dend_dims'], par['connection_prob'])
-    par['w_stim_soma0'] = initialize(par['input_to_hidden_soma_dims'], par['connection_prob'])
+    par['w_env_dend0'] = initialize(par['input_to_decision_dend_dims'], par['connection_prob'])
+    par['w_env_soma0'] = initialize(par['input_to_decision_soma_dims'], par['connection_prob'])
 
-    par['w_td_dend0'] = initialize(par['td_to_hidden_dend_dims'], par['connection_prob'])
-    par['w_td_soma0'] = initialize(par['td_to_hidden_soma_dims'], par['connection_prob'])
+    par['w_dec_to_val_dend0'] = initialize(par['decision_to_val_dend_dims'], par['connection_prob'])
+    par['w_dec_to_val_soma0'] = initialize(par['decision_to_val_soma_dims'], par['connection_prob'])
 
-    par['w_stim_dend0'] *= par['w_stim_dend_mask']
-    par['w_stim_soma0'] *= par['w_stim_soma_mask']
+    par['w_act_to_val_dend0'] = initialize(par['act_to_val_dend_dims'], par['connection_prob'])
+    par['w_act_to_val_soma0'] = initialize(par['act_to_val_soma_dims'], par['connection_prob'])
 
-    par['w_td_dend0'] *= par['w_td_dend_mask']
-    par['w_td_soma0'] *= par['w_td_soma_mask']
+
+    par['w_env_dend0'] *= par['w_env_dend_mask']
+    par['w_env_soma0'] *= par['w_env_soma_mask']
+
+    par['w_dec_to_val_dend0'] *= par['w_dec_to_val_dend_mask']
+    par['w_dec_to_val_soma0'] *= par['w_dec_to_val_soma_mask']
+
+    par['w_act_to_val_dend0'] *= par['w_act_to_val_dend_mask']
+    par['w_act_to_val_soma0'] *= par['w_act_to_val_soma_mask']
 
     # Initialize starting recurrent weights
     # If excitatory/inhibitory neurons desired, initializes with random matrix with
@@ -336,9 +350,9 @@ def update_dependencies():
         par['w_rnn_dend0'] = initialize(par['hidden_to_hidden_dend_dims'], par['connection_prob'])
         par['w_rnn_soma0'] = initialize(par['hidden_to_hidden_soma_dims'], par['connection_prob'])
         #par['w_rnn_dend_mask'] = np.ones((par['hidden_to_hidden_dend_dims']), dtype=np.float32)
-        #par['w_rnn_soma_mask'] = np.ones((par['hidden_to_hidden_soma_dims']), dtype=np.float32) - np.eye(par['n_hidden'])
+        #par['w_rnn_soma_mask'] = np.ones((par['hidden_to_hidden_soma_dims']), dtype=np.float32) - np.eye(par['n_decision'])
 
-        for i in range(par['n_hidden']):
+        for i in range(par['n_decision']+par['n_value']):
             par['w_rnn_soma0'][i,i] = 0
             #par['w_rnn_dend_mask'][i,:,i] = 0
             par['w_rnn_dend0'][i,:,i] = 0
@@ -347,7 +361,7 @@ def update_dependencies():
         par['w_rnn_dend0'] = np.zeros(par['hidden_to_hidden_dend_dims'], dtype=np.float32)
         par['w_rnn_soma0'] = np.eye(par['hidden_to_hidden_soma_dims'], dtype=np.float32)
 
-        for i in range(par['n_hidden']):
+        for i in range(par['n_decision']+par['n_value']):
             par['w_rnn_dend0'][i,:,i] = 1
 
         #par['w_rnn_dend_mask'] = np.ones((par['hidden_to_hidden_dend_dims']), dtype=np.float32)
@@ -361,7 +375,7 @@ def update_dependencies():
     # 1 or self.params['batch_train_size'].
     set_to_one = True
     par['bias_dim'] = (1 if set_to_one else par['batch_train_size'])
-    par['b_rnn0'] = np.zeros((par['n_hidden'], par['bias_dim']), dtype=np.float32)
+    par['b_rnn0'] = np.zeros((par['n_decision']+par['n_value'], par['bias_dim']), dtype=np.float32)
 
     # Effective synaptic weights are stronger when no short-term synaptic plasticity
     # is used, so the strength of the recurrent weights is reduced to compensate
@@ -370,10 +384,10 @@ def update_dependencies():
         par['w_rnn_soma0'] /= (2*spectral_radius(par['w_rnn_soma0']))
 
     # Initialize output weights and biases
-    par['w_out0'] =initialize([par['n_output'], par['n_hidden']], par['connection_prob'])
+    par['w_out0'] =initialize([par['n_output'], par['n_decision']], par['connection_prob'])
 
     par['b_out0'] = np.zeros((par['n_output'], 1), dtype=np.float32)
-    par['w_out_mask'] = np.ones((par['n_output'], par['n_hidden']), dtype=np.float32)
+    par['w_out_mask'] = np.ones((par['n_output'], par['n_decision']), dtype=np.float32)
 
     if par['EI']:
         par['ind_inh'] = np.where(par['EI_list'] == -1)[0]
@@ -388,31 +402,31 @@ def update_dependencies():
     # 1 = facilitating
     # 2 = depressing
 
-    par['synapse_type'] = np.zeros(par['n_hidden'], dtype=np.int8)
+    par['synapse_type'] = np.zeros(par['n_decision']+par['n_value'], dtype=np.int8)
 
     # only facilitating synapses
     if par['synapse_config'] == 'stf':
-        par['synapse_type'] = np.ones(par['n_hidden'], dtype=np.int8)
+        par['synapse_type'] = np.ones(par['n_decision']+par['n_value'], dtype=np.int8)
 
     # only depressing synapses
     elif par['synapse_config'] == 'std':
-        par['synapse_type'] = 2*np.ones(par['n_hidden'], dtype=np.int8)
+        par['synapse_type'] = 2*np.ones(par['n_decision']+par['n_value'], dtype=np.int8)
 
     # even numbers facilitating, odd numbers depressing
     elif par['synapse_config'] == 'std_stf':
-        par['synapse_type'] = np.ones(par['n_hidden'], dtype=np.int8)
-        par['ind'] = range(1,par['n_hidden'],2)
+        par['synapse_type'] = np.ones(par['n_decision']+par['n_value'], dtype=np.int8)
+        par['ind'] = range(1,par['n_decision']+par['n_value'],2)
         par['synapse_type'][par['ind']] = 2
 
-    par['alpha_stf'] = np.ones((par['n_hidden'], 1), dtype=np.float32)
-    par['alpha_std'] = np.ones((par['n_hidden'], 1), dtype=np.float32)
-    par['U'] = np.ones((par['n_hidden'], 1), dtype=np.float32)
+    par['alpha_stf'] = np.ones((par['n_decision']+par['n_value'], 1), dtype=np.float32)
+    par['alpha_std'] = np.ones((par['n_decision']+par['n_value'], 1), dtype=np.float32)
+    par['U'] = np.ones((par['n_decision']+par['n_value'], 1), dtype=np.float32)
 
     # initial synaptic values
-    par['syn_x_init'] = np.zeros((par['n_hidden'], par['batch_train_size']), dtype=np.float32)
-    par['syn_u_init'] = np.zeros((par['n_hidden'], par['batch_train_size']), dtype=np.float32)
+    par['syn_x_init'] = np.zeros((par['n_decision']+par['n_value'], par['batch_train_size']), dtype=np.float32)
+    par['syn_u_init'] = np.zeros((par['n_decision']+par['n_value'], par['batch_train_size']), dtype=np.float32)
 
-    for i in range(par['n_hidden']):
+    for i in range(par['n_decision']+par['n_value']):
         if par['synapse_type'][i] == 1:
             par['alpha_stf'][i,0] = par['dt']/par['tau_slow']
             par['alpha_std'][i,0] = par['dt']/par['tau_fast']
@@ -442,3 +456,5 @@ def set_task_profile():
 set_task_profile()
 update_dependencies()
 print("--> Parameters successfully loaded.\n")
+
+
